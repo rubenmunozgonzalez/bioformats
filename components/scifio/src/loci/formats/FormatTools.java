@@ -813,17 +813,20 @@ public final class FormatTools {
 
     String imageName = retrieve.getImageName(series);
     if (imageName == null) imageName = "Series" + series;
-    imageName = imageName.replaceAll("/", "_");
-    imageName = imageName.replaceAll("\\\\", "_");
+    //imageName = imageName.replaceAll("/", "_");
+    //imageName = imageName.replaceAll("\\\\", "_");
 
     filename = filename.replaceAll(SERIES_NAME, imageName);
 
     r.setSeries(series);
     int[] coordinates = r.getZCTCoords(image);
 
-    filename = filename.replaceAll(Z_NUM, String.valueOf(coordinates[0]));
-    filename = filename.replaceAll(T_NUM, String.valueOf(coordinates[2]));
-    filename = filename.replaceAll(CHANNEL_NUM, String.valueOf(coordinates[1]));
+    //filename = filename.replaceAll(Z_NUM, String.valueOf(coordinates[0]));
+    //filename = filename.replaceAll(T_NUM, String.valueOf(coordinates[2]));
+    //filename = filename.replaceAll(CHANNEL_NUM, String.valueOf(coordinates[1]));
+    filename = filename.replaceAll(Z_NUM, lPad(String.valueOf(coordinates[0]), 3));
+    filename = filename.replaceAll(T_NUM, lPad(String.valueOf(coordinates[2]), 5));
+    filename = filename.replaceAll(CHANNEL_NUM, lPad(String.valueOf(coordinates[1] + 1), 2));
 
     String channelName = retrieve.getChannelName(series, coordinates[1]);
     if (channelName == null) channelName = String.valueOf(coordinates[1]);
@@ -1045,4 +1048,10 @@ public final class FormatTools {
     output.close();
   }
 
+  public static String lPad(String n, int width){			
+     String s = n;
+     while (s.length()<width)
+ 	  s = "0" + s;
+     return s;
+  }
 }

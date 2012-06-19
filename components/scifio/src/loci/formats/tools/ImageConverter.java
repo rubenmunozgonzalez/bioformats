@@ -38,8 +38,14 @@ package loci.formats.tools;
 
 import java.awt.image.IndexColorModel;
 import java.io.BufferedReader;
+import java.io.DataInputStream;
 import java.io.InputStreamReader;
 import java.io.IOException;
+import java.io.File;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
 import java.util.List;
 
 import loci.common.DataTools;
@@ -61,8 +67,8 @@ import loci.formats.ImageReader;
 import loci.formats.ImageTools;
 import loci.formats.ImageWriter;
 import loci.formats.MetadataTools;
-import loci.formats.MinMaxCalculator;
 import loci.formats.MissingLibraryException;
+import loci.formats.MinMaxCalculator;
 import loci.formats.ReaderWrapper;
 import loci.formats.UpgradeChecker;
 import loci.formats.in.OMETiffReader;
@@ -73,11 +79,13 @@ import loci.formats.out.TiffWriter;
 import loci.formats.services.OMEXMLService;
 import loci.formats.services.OMEXMLServiceImpl;
 import loci.formats.tiff.IFD;
+import java.util.regex.Pattern;
+import java.util.regex.Matcher;
+import java.util.Arrays;
+import java.util.Vector;
 
 import ome.xml.model.Image;
 import ome.xml.model.OME;
-import ome.xml.model.enums.PixelType;
-import ome.xml.model.primitives.PositiveInteger;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -90,6 +98,11 @@ import org.slf4j.LoggerFactory;
  * <a href="http://git.openmicroscopy.org/?p=bioformats.git;a=blob;f=components/bio-formats/src/loci/formats/tools/ImageConverter.java;hb=HEAD">Gitweb</a></dd></dl>
  */
 public final class ImageConverter {
+
+  private static int[] indexes;
+  private static String[] reps;
+  private static String[] syms;
+  private static int nreps;
 
   // -- Constants --
 
@@ -119,6 +132,53 @@ public final class ImageConverter {
 
   private ImageConverter() { }
 
+  private static void parseLabels(String infile){
+    indexes = new int[384];
+    reps = new String[384];
+    syms = new String[384];
+    try{
+  	// Open the file that is the first 
+  	// command line parameter
+  	FileInputStream fstream = new FileInputStream(infile);
+  	// Get the object of DataInputStream
+  	DataInputStream in = new DataInputStream(fstream);
+  	BufferedReader br = new BufferedReader(new InputStreamReader(in));
+  	String line;
+  	String[] columns;
+        int n = 0;
+  	//Read File Line By Line
+  	while ((line = br.readLine()) != null)   {
+  		// Print the content on the console
+        	//System.out.println("line: " + line);
+  		columns = line.split("--");
+		indexes[nreps] = (int) Integer.valueOf(columns[0]);
+		if (columns.length > 5){
+			reps[nreps] = columns[4];	
+			columns[5] = columns[5].replace(",","__");
+			columns[5] = columns[5].replace("/","-");
+			syms[nreps] = columns[5];	
+		}
+		else if (columns[4].equals("empty")){
+			reps[nreps] = columns[4];	
+			syms[nreps] = "mock";	
+		}else{
+			reps[nreps] = columns[4];	
+			syms[nreps] = "unknown";	
+		}
+        	//System.out.println("reps [" + nreps + "]= " + reps[nreps]);
+        	//System.out.println("syms [" + nreps + "]= " + syms[nreps]);
+                nreps++;
+  	}
+        System.out.println("\n");
+        System.out.println("CONVERSION RUNNING: Please wait until this window closes automatically\n");
+        System.out.println("\n");
+  	//Close the input stream
+  	in.close();
+   }catch (Exception e){//Catch exception if any
+  	e.printStackTrace();
+   }
+  }
+
   // -- Utility methods --
 
   /** A utility method for converting a file from the command line. */
@@ -126,6 +186,27 @@ public final class ImageConverter {
     throws FormatException, IOException
   {
     DebugTools.enableLogging("INFO");
+    String in = null, out = null;
+    String map = null;
+    String compression = null;
+    String infile = "";
+    boolean stitch = false, separate = false, merge = false, fill = false;
+    boolean bigtiff = false;
+    int series = -1;
+    int firstPlane = 0;
+    long mid = 0;
+    float timeLastLogged = 0;
+    int total = 0;
+    int num = 0;
+    int numImages = 0;
+    float read = 0;
+    float write = 0;
+    int first = 0;
+    int last = 0;
+    int lastPlane = Integer.MAX_VALUE;
+    Vector delete = new Vector();
+    String name = "";
+
     if (args != null) {
       for (int i=0; i<args.length; i++) {
         if (args[i].startsWith("-") && args.length > 1) {
@@ -156,6 +237,10 @@ public final class ImageConverter {
           else if (args[i].equals("-timepoint")) {
             timepoint = Integer.parseInt(args[++i]);
           }
+          else if (args[i].equals("-infile")){
+		infile = args[++i];
+		parseLabels(infile);
+	  }
           else if (args[i].equals("-series")) {
             try {
               series = Integer.parseInt(args[++i]);
@@ -169,21 +254,13 @@ public final class ImageConverter {
             }
             catch (NumberFormatException exc) { }
           }
-          else if (args[i].equals("-crop")) {
-            String[] tokens = args[++i].split(",");
-            xCoordinate = Integer.parseInt(tokens[0]);
-            yCoordinate = Integer.parseInt(tokens[1]);
-            width = Integer.parseInt(tokens[2]);
-            height = Integer.parseInt(tokens[3]);
-          }
           else {
             LOGGER.error("Found unknown command flag: {}; exiting.", args[i]);
             return false;
           }
         }
         else {
-          if (args[i].equals("-version")) printVersion = true;
-          else if (in == null) in = args[i];
+          if (in == null) in = args[i];
           else if (out == null) out = args[i];
           else {
             LOGGER.error("Found unknown argument: {}; exiting.", args[i]);
@@ -194,24 +271,13 @@ public final class ImageConverter {
         }
       }
     }
-
-    if (printVersion) {
-      LOGGER.info("Version: {}", FormatTools.VERSION);
-      LOGGER.info("VCS revision: {}", FormatTools.VCS_REVISION);
-      LOGGER.info("Build date: {}", FormatTools.DATE);
-      return true;
-    }
-
     if (in == null || out == null) {
       String[] s = {
         "To convert a file between formats, run:",
         "  bfconvert [-debug] [-stitch] [-separate] [-merge] [-expand]",
         "    [-bigtiff] [-compression codec] [-series series] [-map id]",
-        "    [-range start end] [-crop x,y,w,h] [-channel channel] [-z Z]",
-        "    [-timepoint timepoint] [-nogroup] [-autoscale] [-version]",
-        "    in_file out_file",
+        "    [-range start end] in_file out_file",
         "",
-        "    -version: print the library version and exit",
         "      -debug: turn on debugging output",
         "     -stitch: stitch input files with similar names",
         "   -separate: split RGB images into separate channels",
@@ -233,6 +299,7 @@ public final class ImageConverter {
         "    -channel: only convert the specified channel (indexed from 0)",
         "          -z: only convert the specified Z section (indexed from 0)",
         "  -timepoint: only convert the specified timepoint (indexed from 0)",
+        "    -infile: specify microscope-in file to rename",
         "",
         "If any of the following patterns are present in out_file, they will",
         "be replaced with the indicated metadata value from the input file.",
@@ -245,7 +312,6 @@ public final class ImageConverter {
         "   " + FormatTools.CHANNEL_NAME +"\t\tchannel name",
         "   " + FormatTools.Z_NUM + "\t\tZ index",
         "   " + FormatTools.T_NUM + "\t\tT index",
-        "   " + FormatTools.TIMESTAMP + "\t\tacquisition timestamp",
         "",
         "If any of these patterns are present, then the images to be saved",
         "will be split into multiple files.  For example, if the input file",
@@ -292,6 +358,12 @@ public final class ImageConverter {
     long start = System.currentTimeMillis();
     LOGGER.info(in);
     reader = new ImageReader();
+
+/* XXX
+    boolean loop = true;
+
+    do{
+*/
     if (stitch) {
       reader = new FileStitcher(reader);
       Location f = new Location(in);
@@ -313,7 +385,6 @@ public final class ImageConverter {
       minMax = (MinMaxCalculator) reader;
     }
 
-    reader.setGroupFiles(group);
     reader.setMetadataFiltered(true);
     reader.setOriginalMetadataPopulated(true);
     OMEXMLService service = null;
@@ -332,7 +403,6 @@ public final class ImageConverter {
     reader.setId(in);
 
     MetadataStore store = reader.getMetadataStore();
-
     MetadataTools.populatePixels(store, reader, false, false);
 
     boolean dimensionsSet = true;
@@ -357,14 +427,6 @@ public final class ImageConverter {
 
           newRoot.addImage(exportImage);
           meta.setRoot(newRoot);
-
-          meta.setPixelsSizeX(new PositiveInteger(width), 0);
-          meta.setPixelsSizeY(new PositiveInteger(height), 0);
-
-          if (autoscale) {
-            store.setPixelsType(PixelType.UINT8, 0);
-          }
-
           writer.setMetadataRetrieve((MetadataRetrieve) meta);
         }
         catch (ServiceException e) {
@@ -372,17 +434,6 @@ public final class ImageConverter {
         }
       }
       else {
-        for (int i=0; i<reader.getSeriesCount(); i++) {
-          if (width != reader.getSizeX() || height != reader.getSizeY()) {
-            store.setPixelsSizeX(new PositiveInteger(width), 0);
-            store.setPixelsSizeY(new PositiveInteger(height), 0);
-          }
-
-          if (autoscale) {
-            store.setPixelsType(PixelType.UINT8, i);
-          }
-        }
-
         writer.setMetadataRetrieve((MetadataRetrieve) store);
       }
     }
@@ -399,16 +450,21 @@ public final class ImageConverter {
     }
 
     String format = writer.getFormat();
-    LOGGER.info("[{}] -> {} [{}]",
-      new Object[] {reader.getFormat(), out, format});
-    long mid = System.currentTimeMillis();
+    //LOGGER.info("[{}] -> {} [{}]",
+    //  new Object[] {reader.getFormat(), out, format});
+    mid = System.currentTimeMillis();
 
-    int total = 0;
-    int num = writer.canDoStacks() ? reader.getSeriesCount() : 1;
-    long read = 0, write = 0;
-    int first = series == -1 ? 0 : series;
-    int last = series == -1 ? num : series + 1;
-    long timeLastLogged = System.currentTimeMillis();
+    total = 0;
+    num = writer.canDoStacks() ? reader.getSeriesCount() : 1;
+    read = 0; 
+    write = 0;
+    first = series == -1 ? 0 : series;
+    last = series == -1 ? num : series + 1;
+    timeLastLogged = System.currentTimeMillis();
+
+    String platename = "";
+    int index = 0;
+
     for (int q=first; q<last; q++) {
       reader.setSeries(q);
 
@@ -419,78 +475,141 @@ public final class ImageConverter {
 
       int writerSeries = series == -1 ? q : 0;
       writer.setSeries(writerSeries);
-      writer.setInterleaved(reader.isInterleaved() && !autoscale);
+      writer.setInterleaved(reader.isInterleaved());
       writer.setValidBitsPerPixel(reader.getBitsPerPixel());
-      int numImages = writer.canDoStacks() ? reader.getImageCount() : 1;
+      numImages = writer.canDoStacks() ? reader.getImageCount() : 1;
+      LOGGER.info("Image Count: " + reader.getImageCount());
+      //loop = false;
 
       int startPlane = (int) Math.max(0, firstPlane);
       int endPlane = (int) Math.min(numImages, lastPlane);
       numImages = endPlane - startPlane;
 
-      if (channel >= 0) {
-        numImages /= reader.getEffectiveSizeC();
-      }
-      if (zSection >= 0) {
-        numImages /= reader.getSizeZ();
-      }
-      if (timepoint >= 0) {
-        numImages /= reader.getSizeT();
-      }
-
       total += numImages;
 
-      int count = 0;
       for (int i=startPlane; i<endPlane; i++) {
-        int[] coords = reader.getZCTCoords(i);
+        long m = System.currentTimeMillis();
+	long s = m;
 
-        if ((zSection >= 0 && coords[0] != zSection) || (channel >= 0 &&
-          coords[1] != channel) || (timepoint >= 0 && coords[2] != timepoint))
-        {
-          continue;
-        }
+        name = FormatTools.getFilename(q, i, reader, out);
+        if (infile != ""){
+		Pattern pattern = Pattern.compile(".*/W([0-9]+).*");
+		Matcher matcher = pattern.matcher(name);
 
-        writer.setId(FormatTools.getFilename(q, i, reader, out));
-        if (compression != null) writer.setCompression(compression);
+		if (matcher.find()) {
+           	    index = (int) Integer.valueOf(matcher.group(1)) - 1;
+		}
+		else{
+			pattern = Pattern.compile(".*\\\\W([0-9]+).*");
+			matcher = pattern.matcher(name);
+			if (matcher.find()) {
+                    		index = (int) Integer.valueOf(matcher.group(1)) - 1;
+                	}
+		}
+		pattern = Pattern.compile(".*/([^/]*)/W[0-9]+.*");
+		matcher = pattern.matcher(name);
 
-        long s = System.currentTimeMillis();
-        long m = convertPlane(writer, i, startPlane);
-        long e = System.currentTimeMillis();
-        read += m - s;
-        write += e - m;
+		if (matcher.find()) {
+           	    platename = matcher.group(1);
+		}
+		else{
+			pattern = Pattern.compile(".*\\\\([^/]*)\\\\W[0-9]+.*");
+			matcher = pattern.matcher(name);
+			if (matcher.find()) {
+           	    		platename = matcher.group(1);
+			}
+		}
+		
+           	//System.out.println("platename = " + platename);
+           	//System.out.println("int index = (int)Math.floor(" + q + " / " + "(int)Math.floor(" + last + " / " + nreps + "));");
+		int tmp = Math.max(infile.lastIndexOf("\\"), infile.lastIndexOf("/"));
+		//tmp = Math.max(tmp + 1, 0);
+		//if (infile.lastIndexOf('.') > 0)
+		//	platename = infile.substring(tmp, infile.lastIndexOf('.'));
+		//else
+		//	platename = infile.substring(tmp);
 
-        // log number of planes processed every second or so
-        if (count == numImages - 1 || (e - timeLastLogged) / 1000 > 0) {
-          int current = (count - startPlane) + 1;
-          int percent = 100 * current / numImages;
-          StringBuilder sb = new StringBuilder();
-          sb.append("\t");
-          int numSeries = last - first;
-          if (numSeries > 1) {
-            sb.append("Series ");
-            sb.append(q);
-            sb.append(": converted ");
-          }
-          else sb.append("Converted ");
-          LOGGER.info(sb.toString() + "{}/{} planes ({}%)",
-            new Object[] {current, numImages, percent});
-          timeLastLogged = e;
-        }
-        count++;
+               	name = name.replace("platename", platename);
+               	name = name.replace("reporter", reps[index]);
+               	name = name.replace("symbol", syms[index]);
+		//System.out.println("name: " + name);
+		//System.out.println("infile: " + infile);
+		//System.out.println("platename: " + platename);
+		//System.out.println("index: " + index);
+	}
+
+        if (!(new File(name).exists())){
+		//loop = true;
+        	((new File(name)).getParentFile()).mkdirs();
+        	writer.setId(name);
+        	//File tmpfile = File.createTempFile("image",".ome.tif");
+        	//writer.setId(tmpfile.getAbsolutePath());
+        	if (compression != null) writer.setCompression(compression);
+
+        	s = System.currentTimeMillis();
+        	byte[] buf = reader.openBytes(i);
+                byte[] empty = new byte[buf.length];
+        	byte[][] lut = reader.get8BitLookupTable();
+        	if (lut != null) {
+          		IndexColorModel model = new IndexColorModel(8, lut[0].length,
+            		lut[0], lut[1], lut[2]);
+          		writer.setColorModel(model);
+        	}
+
+        	LOGGER.info(name);
+        	writer.saveBytes(i - startPlane, buf);
+      		if (Arrays.equals(empty, buf)){
+        		LOGGER.info("Will delete: " + name);
+			delete.add(name);
+		}
+		
+        	//copyFile(tmpfile,new File(FormatTools.getFilename(q, i, reader, out)));
+        	//tmpfile.delete();
+        	long e = System.currentTimeMillis();
+       		read += m - s;
+       		write += e - m;
+
+        	// log number of planes processed every second or so
+        	if (i == numImages - 1 || (e - timeLastLogged) / 1000 > 0) {
+          		int current = (i - startPlane) + 1;
+          		int percent = 100 * current / numImages;
+          		StringBuilder sb = new StringBuilder();
+          		sb.append("\t");
+          		int numSeries = last - first;
+          		if (numSeries > 1) {
+            			sb.append("Series ");
+            			sb.append(q);
+            			sb.append(": converted ");
+          		}
+          	else sb.append("Converted ");
+            		//new Object[] {current, numImages, percent});
+          		timeLastLogged = e;
+        	}
+	  }
+	}
       }
+      writer.close();
+/*
+    }while(loop);
+*/
+     
+    while(delete.size() > 0){
+	name = (String)delete.remove(0);
+    	(new File(name)).delete();
     }
-    writer.close();
-    long end = System.currentTimeMillis();
-    LOGGER.info("[done]");
+
+    LOGGER.info("[conversion done]");
+    return true;
+
+    //long end = System.currentTimeMillis();
 
     // output timing results
-    float sec = (end - start) / 1000f;
-    long initial = mid - start;
-    float readAvg = (float) read / total;
-    float writeAvg = (float) write / total;
-    LOGGER.info("{}s elapsed ({}+{}ms per plane, {}ms overhead)",
-      new Object[] {sec, readAvg, writeAvg, initial});
-
-    return true;
+    //float sec = (end - start) / 1000f;
+    //long initial = mid - start;
+    //float readAvg = (float) read / total;
+    //float writeAvg = (float) write / total;
+    //LOGGER.info("{}s elapsed ({}+{}ms per plane, {}ms overhead)",
+    //  new Object[] {sec, readAvg, writeAvg, initial});
   }
 
   // -- Helper methods --
@@ -631,6 +750,31 @@ public final class ImageConverter {
     ImageConverter converter = new ImageConverter();
     if (!converter.testConvert(new ImageWriter(), args)) System.exit(1);
     System.exit(0);
+  }
+
+  public static void copyFile(File source, File dest) throws IOException {
+	
+		if(!dest.exists()) {
+			dest.createNewFile();
+		}
+        InputStream in = null;
+        OutputStream out = null;
+        try {
+        	in = new FileInputStream(source);
+        	out = new FileOutputStream(dest);
+    
+	        // Transfer bytes from in to out
+	        byte[] buf = new byte[1024];
+	        int len;
+	        while ((len = in.read(buf)) > 0) {
+	            out.write(buf, 0, len);
+	        }
+        }
+        finally {
+        	in.close();
+            out.close();
+        }
+        
   }
 
 }

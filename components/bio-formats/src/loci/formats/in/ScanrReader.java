@@ -89,6 +89,8 @@ public class ScanrReader extends FormatReader {
   private int tileWidth = 0;
   private int tileHeight = 0;
 
+  private boolean flag = false;
+
   private String[] tiffs;
   private MinimalTiffReader reader;
 
@@ -263,10 +265,11 @@ public class ScanrReader extends FormatReader {
   /* @see loci.formats.FormatReader#initFile(String) */
   protected void initFile(String id) throws FormatException, IOException {
     super.initFile(id);
-    if (metadataFiles.size() > 0) {
+
+    //if (metadataFiles.size() > 0 || flag) {
       // this dataset has already been initialized
-      return;
-    }
+    //  return;
+    //}
 
     // make sure we have the .xml file
     if (!checkSuffix(id, "xml") && isGroupFiles()) {
@@ -344,13 +347,15 @@ public class ScanrReader extends FormatReader {
           uniqueColumns.add(column);
         }
       }
+    }
 
-      wellRows = uniqueRows.size();
-      wellColumns = uniqueColumns.size();
+    wellRows = uniqueRows.size();
+    wellColumns = uniqueColumns.size();
 
-      if (wellRows * wellColumns != wellCount) {
-        adjustWellDimensions();
-      }
+    LOGGER.info("Number of Rows: " + wellRows);
+    LOGGER.info("Number of Columns: " + wellColumns);
+    if (wellRows * wellColumns != wellCount) {
+      adjustWellDimensions();
     }
 
     int nChannels = getSizeC() == 0 ? channelNames.size() : getSizeC();
@@ -362,20 +367,43 @@ public class ScanrReader extends FormatReader {
     if (nPos == 0) nPos = 1;
 
     // get list of TIFF files
-
     Location dataDir = new Location(dir, "data");
     list = dataDir.list(true);
     if (list == null) {
-      // try to find the TIFFs in the current directory
-      list = dir.list(true);
+   	// try to find the TIFFs in the current directory
+      	list = dir.list(true);
     }
     else dir = dataDir;
+
+    System.out.println("Number of files: " + list.length);
+    // System.out.println("nTimepoints * nChannels * nSlices * nWell * nPos: " + nTimepoints + " * " + nChannels + " * " +  nSlices + " * " + nWells + " * " + nPos);
     if (nTimepoints == 0 ||
-      list.length < nTimepoints * nChannels * nSlices * nWells * nPos)
+      list.length != nTimepoints * nChannels * nSlices * nWells * nPos)
     {
-      nTimepoints = list.length / (nChannels * nWells * nPos * nSlices);
-      if (nTimepoints == 0) nTimepoints = 1;
+// Do not wait for the microscope to end
+//
+//      do{
+// Do not wait for the microscope to end
+//        if (list.length < nChannels * nSlices * nWells * nPos){
+//		System.out.println("WARNING: Number of wells available is " + new Integer(list.length / (nChannels * nPos * nSlices)).toString() + " out of " + nWells);
+//		System.out.println("WAITING FOR ONE MINUTE");
+//		try{
+//			Thread.currentThread().sleep(60000);
+//		}catch(InterruptedException e){
+//			return;
+//		};
+//	 	list = dataDir.list(true);
+//   		System.out.println("Number of files: " + list.length);
+//	}
+// Do not wait for the microscope to end
+        nTimepoints = list.length / (nChannels * nWells * nPos * nSlices);
+        if (nTimepoints == 0)
+		nTimepoints = 1;
+// Do not wait for the microscope to end
+//      }while (nTimepoints == 0);
     }
+    System.out.println("Number of timepoints: " + nTimepoints);
+    //System.out.println("OK: Number of wells available is " + new Integer(list.length / (nChannels * nPos * nSlices * nTimepoints)).toString() + " out of " + nWells);
 
     tiffs = new String[nChannels * nWells * nPos * nTimepoints * nSlices];
 
@@ -415,7 +443,7 @@ public class ScanrReader extends FormatReader {
       }
     });
     int lastListIndex = 0;
-
+    boolean found;
     int next = 0;
     String[] keys = wellLabels.keySet().toArray(new String[wellLabels.size()]);
     Arrays.sort(keys, new Comparator<String>() {
@@ -452,7 +480,8 @@ public class ScanrReader extends FormatReader {
             String tPos = getBlock(t, "T");
 
             for (int c=0; c<nChannels; c++) {
-              for (int i=lastListIndex; i<list.length; i++) {
+	      found = false;
+              for (int i=0; i<list.length; i++) {
                 String file = list[i];
                 if (file.indexOf(wellPos) != -1 && file.indexOf(zPos) != -1 &&
                   file.indexOf(posPos) != -1 && file.indexOf(tPos) != -1 &&
@@ -462,9 +491,14 @@ public class ScanrReader extends FormatReader {
                   if (c == nChannels - 1) {
                     lastListIndex = i;
                   }
+		  found = true;
                   break;
                 }
               }
+              //  Check if the image was missing and leave the gap
+	      if (!found){
+		next++;
+	      }
             }
           }
         }
@@ -500,7 +534,10 @@ public class ScanrReader extends FormatReader {
     }
 
     reader = new MinimalTiffReader();
-    reader.setId(tiffs[0]);
+    int first = 0;
+    while(tiffs[first] == null)
+	first ++;
+    reader.setId(tiffs[first]);
     int sizeX = reader.getSizeX();
     int sizeY = reader.getSizeY();
     int pixelType = reader.getPixelType();
@@ -592,8 +629,9 @@ public class ScanrReader extends FormatReader {
       store.setWellSampleImageRef(imageID, 0, well, field);
       store.setImageID(imageID, i);
 
-      String name = "Well " + (well + 1) + ", Field " + (field + 1) +
-        " (Spot " + (i + 1) + ")";
+      String name = "W" + lPad(""+(wellIndex+1), 4) + "--reporter--symbol/P" + lPad(""+(field+1),3) + "--reporter--symbol/platename--reporter--symbol--W" + lPad(""+(wellIndex+1), 4) + "--P" + lPad(""+(field+1),3);
+      //String name = "Well " + (wellIndex + 1) + ", Field " + (field + 1) +
+      //  " (Spot " + (i + 1) + ")";
       store.setImageName(name, i);
 
       store.setPlateAcquisitionWellSampleRef(wellSample, 0, 0, i);
@@ -705,6 +743,7 @@ public class ScanrReader extends FormatReader {
         }
         else if (key.equals("timeloop count")) {
           core[0].sizeT = Integer.parseInt(value) + 1;
+          if (getSizeT() == 0) core[0].sizeT = 1;
         }
         else if (key.equals("timeloop delay [ms]")) {
           deltaT = Integer.parseInt(value) / 1000.0;
@@ -798,4 +837,10 @@ public class ScanrReader extends FormatReader {
     }
   }
 
+  public static String lPad(String n, int width){                       
+     String s = n;
+     while (s.length()<width)
+          s = "0" + s;
+     return s;                                          
+  }
 }
