@@ -37,6 +37,9 @@
 package loci.formats.out;
 
 import java.io.IOException;
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -84,6 +87,7 @@ public class OMETiffWriter extends TiffWriter {
   private List<Integer> seriesMap;
   private String[][] imageLocations;
   private OMEXMLMetadata omeMeta;
+  private boolean isFirst = true;
   private OMEXMLService service;
   private Map<String, Integer> ifdCounts = new HashMap<String, Integer>();
 
@@ -272,7 +276,17 @@ public class OMETiffWriter extends TiffWriter {
       TiffSaver saver = new TiffSaver(out, file);
       in = new RandomAccessInputStream(file);
       saver.overwriteLastIFDOffset(in);
-      saver.overwriteComment(in, xml);
+      if (isFirst){
+          String xmlfile = new File(imageLocations[0][0]).getParentFile().getParentFile().getParentFile().getPath() + "/" + new File(imageLocations[0][0]).getParentFile().getParentFile().getParentFile().getName() + ".xml";
+          FileWriter fstream = new FileWriter(xmlfile);
+          BufferedWriter xmlout = new BufferedWriter(fstream);
+          xmlout.write(xml);
+          //Close the output stream
+          xmlout.close();
+          //saver.overwriteComment(in, xml);
+          isFirst = false;
+      }
+      saver.overwriteComment(in, "");
       in.close();
     }
     catch (FormatException exc) {
